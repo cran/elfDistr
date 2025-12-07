@@ -3,6 +3,7 @@
 \name{Kw-CWG}
 \alias{Kw-CWG}
 \alias{dkwcwg}
+\alias{kwcwg}
 \alias{pkwcwg}
 \alias{qkwcwg}
 \alias{rkwcwg}

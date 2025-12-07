@@ -1,5 +1,4 @@
 #include <Rcpp.h>
-// [[Rcpp::plugins(cpp11)]]
 // [[Rcpp::plugins(openmp)]]
 
 using std::pow;
@@ -40,6 +39,7 @@ using Rcpp::Rcout;
  *  )**(b-1)
  */
 
+/*
 inline double logpdf_kwcwg(
 	double x, double alpha, double beta,
 	double gamma, double a, double b)
@@ -57,6 +57,21 @@ inline double logpdf_kwcwg(
 	// return A * (B**(a-1)/C**(a+1)) * (1 - D/E)**(b-1)
 
 	return log(A) + (a-1)*log(B) - (a+1)*log(C) + (b-1)*log(1 - D/E);
+}
+*/
+
+inline double logpdf_kwcwg(
+	double x, double alpha, double beta,
+	double gamma, double a, double b)
+{
+	// Common term in the equation
+	double aux1 = pow(gamma*x, beta); // (gamma*x)^beta
+	double aux2 = exp(-aux1);         // exp[ -(gamma*x)^beta ]
+	double aux3 = alpha + aux2*(1-alpha); // { alpha + (1-alpha)*exp[ -(gamma*x)^beta ] }
+	double cdf_g = alpha*(1 - aux2) / aux3;
+	double pdf_g = (alpha*beta*gamma*aux1/(gamma*x)*aux2) / (aux3*aux3);
+
+	return log(a) + log(b) + log(pdf_g) + (a-1)*log(cdf_g) + (b-1)*log(1 - pow(cdf_g, a));
 }
 
 inline double cdf_kwcwg(
@@ -108,6 +123,33 @@ NumericVector cpp_dkwcwg(
 		return NumericVector(0);
 	}
 
+	bool throw_warning = false;
+
+	// Bounds verifications
+	#pragma omp parallel sections
+	{
+		#pragma omp section
+		for(double a: valpha){
+			if(a < 0.0 || a > 1.0) throw_warning = true;
+		}
+		#pragma omp section
+		for(double b: vbeta){
+			if(b < 0.0) throw_warning = true;
+		}
+		#pragma omp section
+		for(double g: vgamma){
+			if(g < 0.0) throw_warning = true;
+		}
+		#pragma omp section
+		for(double a: va){
+			if(a < 0.0) throw_warning = true;
+		}
+		#pragma omp section
+		for(double b: vb){
+			if(b < 0.0) throw_warning = true;
+		}
+	}
+
 	int maxN = std::max({
 		vx.length(),
 		valpha.length(),
@@ -117,43 +159,23 @@ NumericVector cpp_dkwcwg(
 		vb.length()
 	});
 	NumericVector p(maxN);
-	
-	bool throw_warning = false;
 
-	#pragma omp parallel for
-	for(int i = 0; i < maxN; i++){
-		const double x = GETV(vx, i);
-		const double alpha = GETV(valpha, i);
-		const double beta = GETV(vbeta, i);
-		const double gamma = GETV(vgamma, i);
-		const double a = GETV(va, i);
-		const double b = GETV(vb, i);
-
-		#ifdef IEEE_754
-		if(ISNAN(x) || ISNAN(alpha) || ISNAN(beta) || ISNAN(gamma) || ISNAN(a) || ISNAN(b))
-			p[i] = x+alpha+beta+gamma+a+b;
-		else
-		#endif
-		if(alpha < 0.0 || alpha > 1.0
-		   || beta < 0.0
-		   || gamma < 0.0
-		   || a < 0.0
-		   || b < 0.0)
-		{
-			// Concurrency will not cause problems here.
-			throw_warning = true;
+	if(throw_warning){
+		Rcpp::warning("NaNs produced");
+		for(int i = 0; i < maxN; i++){
 			p[i] = NAN;
-		} else {
-			p[i] = logpdf_kwcwg(x, alpha, beta, gamma, a, b);
 		}
+		return p;
+	}
+
+	#pragma omp parallel for schedule(dynamic,64)
+	for(int i = 0; i < maxN; i++){
+		p[i] = logpdf_kwcwg(GETV(vx, i), GETV(valpha, i), GETV(vbeta, i), GETV(vgamma, i), GETV(va, i), GETV(vb, i));
 	}
 
 	if(!log_prob)
 		p = Rcpp::exp(p);
 	
-	if(throw_warning)
-		Rcpp::warning("NaNs produced");
-
 	return p;
 }
 
